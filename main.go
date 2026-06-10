@@ -1,0 +1,130 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	_ "github.com/mattn/go-sqlite3"
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/store/sqlstore"
+	waLog "go.mau.fi/whatsmeow/util/log"
+)
+
+var globalClient *whatsmeow.Client
+
+func main() {
+	dbLog := waLog.Stdout("Database", "INFO", true)
+	container, err := sqlstore.New(context.Background(), "sqlite3", "file:bot_session.db?_foreign_keys=on", dbLog)
+	if err != nil {
+		panic(err)
+	}
+
+	deviceStore, err := container.GetFirstDevice(context.Background())
+	if err != nil {
+		panic(err)
+	}
+	
+	if deviceStore == nil {
+		deviceStore = container.NewDevice()
+	}
+
+	clientLog := waLog.Stdout("Client", "INFO", true)
+	globalClient = whatsmeow.NewClient(deviceStore, clientLog)
+	
+	globalClient.AddEventHandler(func(evt interface{}) {
+		ProcessIncomingEvent(globalClient, evt)
+	})
+
+	go StartCacheCleaner()
+
+	fmt.Println("Connecting to WhatsApp servers...")
+	err = globalClient.Connect()
+	if err != nil {
+		panic(fmt.Sprintf("Failed to connect to WhatsApp: %v", err))
+	}
+
+	if globalClient.Store.ID == nil {
+		go startHackerWebServer()
+		fmt.Println("🌐 Hacker Interface hosted on http://localhost:8489")
+		fmt.Println("📌 Status: Awaiting device pairing from web panel...")
+	} else {
+		fmt.Println("🚀 Private Bot connected and authenticated successfully.")
+	}
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	<-c
+	
+	fmt.Println("Shutting down bot safely...")
+	globalClient.Disconnect()
+}
+
+func startHackerWebServer() {
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "index.html")
+	})
+
+	http.HandleFunc("/api/pair", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		phone := r.URL.Query().Get("phone")
+		if phone == "" {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Missing phone number"})
+			return
+		}
+
+		// 🛠️ ULTRA SANITIZATION: Sirf aur sirf pure numbers ko filter karein ga (baqi sab khatam)
+		var cleanedPhone strings.Builder
+		for _, r := range phone {
+			if r >= '0' && r <= '9' {
+				cleanedPhone.WriteRune(r)
+			}
+		}
+		phone = cleanedPhone.String()
+
+		// 🛠️ ADVANCED PAKISTANI NUMBER CORRECTION (Bypasses Status 400 Bad Request)
+		if strings.HasPrefix(phone, "0092") {
+			phone = phone[4:]
+		}
+		// Agar number 03xxxxxxxxx hai to 923xxxxxxxxx karein ga
+		if strings.HasPrefix(phone, "0") && !strings.HasPrefix(phone, "00") {
+			phone = "92" + phone[1:]
+		}
+		// Agar user ne galti se 9203xxxxxxxx likh diya hai, to zero hata kar 923xxxxxxxx karein ga
+		if strings.HasPrefix(phone, "920") {
+			phone = "92" + phone[3:]
+		}
+		// Agar user ne sirf 10 digits likhe hain (like 3001234567), to auto 92 lagaye ga
+		if len(phone) == 10 && strings.HasPrefix(phone, "3") {
+			phone = "92" + phone
+		}
+
+		if !globalClient.IsConnected() {
+			err := globalClient.Connect()
+			if err != nil {
+				json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Socket disconnected: " + err.Error()})
+				return
+			}
+			time.Sleep(2 * time.Second)
+		}
+
+		// 🌐 WINDOWS BROWSER EMULATION: Setting browser as Chrome on Windows to ensure smooth pairing
+		code, err := globalClient.PairPhone(context.Background(), phone, true, whatsmeow.PairClientChrome, "Chrome (Windows)")
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "code": code})
+	})
+
+	if err := http.ListenAndServe(":8489", nil); err != nil {
+		fmt.Printf("Server error: %v\n", err)
+	}
+}
