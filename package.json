@@ -1,14 +1,1 @@
-{
-  "name": "whatsapp-bot-vercel",
-  "version": "1.0.0",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.14",
-    "express": "^4.19.2",
-    "fs-extra": "^11.2.0",
-    "pino": "^9.4.0"
-  }
-}
+"@whiskeysockets/baileys": "6.6.0"
