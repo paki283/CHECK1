@@ -16,10 +16,12 @@ const prefix = '.';
 
 // Commands load
 const commands = new Map();
-const commandFiles = fs.readdirSync('./commands').filter(f => f.endsWith('.js'));
-for (const file of commandFiles) {
-    const cmd = require(`./commands/${file}`);
-    commands.set(cmd.name, cmd);
+if (fs.existsSync('./commands')) {
+    const commandFiles = fs.readdirSync('./commands').filter(f => f.endsWith('.js'));
+    for (const file of commandFiles) {
+        const cmd = require(`./commands/${file}`);
+        commands.set(cmd.name, cmd);
+    }
 }
 
 // Groups data - Crash fix
@@ -57,10 +59,9 @@ async function startBot(phoneNumber = '') {
             isConnected = true;
             pairingCode = '';
             console.log('✅ Bot Connected');
-            // Always freeze lastseen + private mode
             setTimeout(async () => {
-                await sock.updatePresence('unavailable');
-                await sock.sendPresenceUpdate('unavailable');
+                await sock.updatePresence('unavailable'); // Lastseen freeze
+                await sock.sendPresenceUpdate('unavailable'); // Private mode
             }, 3000);
         } else if (connection === 'close') {
             isConnected = false;
@@ -71,14 +72,12 @@ async function startBot(phoneNumber = '') {
         }
     });
 
-    // Pairing via website
     if (phoneNumber &&!sock.authState.creds.registered) {
         await new Promise(r => setTimeout(r, 3000));
         pairingCode = await sock.requestPairingCode(phoneNumber.replace(/[^0-9]/g, ''));
         console.log('Pairing Code:', pairingCode);
     }
 
-    // Message handler
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type!== 'notify') return;
         const msg = messages[0];
@@ -89,7 +88,6 @@ async function startBot(phoneNumber = '') {
         const sender = msg.key.participant || from;
         const text = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || '';
 
-        // Group settings init
         if (isGroup &&!groupSettings[from]) {
             groupSettings[from] = { antivv: false, antidelete: false, antiedit: false };
             saveSettings();
@@ -131,19 +129,30 @@ async function startBot(phoneNumber = '') {
     });
 }
 
-// API Routes for Vercel website pairing
+// API - Vercel ke liye
 app.get('/status', (req, res) => res.json({ connected: isConnected, code: pairingCode }));
 app.post('/pair', async (req, res) => {
     const { number } = req.body;
-    if (!number) return res.json({ error: 'Number do +92300xxxxxxx format' });
+    if (!number) return res.json({ error: 'Number do +92300xxxxxxx' });
+
+    // Vercel pe bot start na karo sirf message do
+    if (process.env.VERCEL === '1') {
+        return res.json({ error: 'Bot Vercel pe nahi chalega. Railway/Replit use karo' });
+    }
+
     if (sock &&!sock.authState.creds.registered) {
         const code = await sock.requestPairingCode(number.replace(/[^0-9]/g, ''));
         pairingCode = code;
         res.json({ code });
-    } else res.json({ error: isConnected? 'Already Connected' : 'Wait 5 sec' });
+    } else res.json({ error: isConnected? 'Connected' : 'Wait' });
 });
+
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.listen(PORT, () => {
     console.log(`Web: http://localhost:${PORT}`);
-    startBot();
+
+    // Vercel pe bot start na karo - 500 error khatam
+    if (process.env.VERCEL!== '1') {
+        startBot();
+    }
 });
