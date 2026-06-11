@@ -1,4 +1,3 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadContentFromMessage } = require('@whiskeysockets/baileys');
 const express = require('express');
 const path = require('path');
 const fs = require('fs-extra');
@@ -13,6 +12,9 @@ let sock = null;
 let pairingCode = '';
 let isConnected = false;
 const prefix = '.';
+
+// Baileys ESM variables
+let makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadContentFromMessage;
 
 // Commands load
 const commands = new Map();
@@ -38,7 +40,30 @@ function saveSettings() {
     fs.writeJsonSync(dataFile, groupSettings, { spaces: 2 });
 }
 
+// Baileys ESM import
+(async () => {
+    const baileys = await import('@whiskeysockets/baileys');
+    makeWASocket = baileys.default;
+    useMultiFileAuthState = baileys.useMultiFileAuthState;
+    DisconnectReason = baileys.DisconnectReason;
+    fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
+    downloadContentFromMessage = baileys.downloadContentFromMessage;
+
+    // Vercel pe bot start na karo - sirf Railway/Replit pe
+    if (process.env.VERCEL!== '1') {
+        console.log('Bot starting...');
+        startBot();
+    } else {
+        console.log('Vercel detected - Bot disabled, only web running');
+    }
+})();
+
 async function startBot(phoneNumber = '') {
+    if (!makeWASocket) {
+        setTimeout(() => startBot(phoneNumber), 1000);
+        return;
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState('session');
     const { version } = await fetchLatestBaileysVersion();
 
@@ -129,30 +154,24 @@ async function startBot(phoneNumber = '') {
     });
 }
 
-// API - Vercel ke liye
+// API Routes
 app.get('/status', (req, res) => res.json({ connected: isConnected, code: pairingCode }));
 app.post('/pair', async (req, res) => {
     const { number } = req.body;
     if (!number) return res.json({ error: 'Number do +92300xxxxxxx' });
 
-    // Vercel pe bot start na karo sirf message do
     if (process.env.VERCEL === '1') {
-        return res.json({ error: 'Bot Vercel pe nahi chalega. Railway/Replit use karo' });
+        return res.json({ error: 'Bot Vercel pe nahi chalta. Railway.app use karo 24/7 ke liye' });
     }
 
     if (sock &&!sock.authState.creds.registered) {
         const code = await sock.requestPairingCode(number.replace(/[^0-9]/g, ''));
         pairingCode = code;
         res.json({ code });
-    } else res.json({ error: isConnected? 'Connected' : 'Wait' });
+    } else res.json({ error: isConnected? 'Connected' : 'Wait 5 sec' });
 });
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.listen(PORT, () => {
     console.log(`Web: http://localhost:${PORT}`);
-
-    // Vercel pe bot start na karo - 500 error khatam
-    if (process.env.VERCEL!== '1') {
-        startBot();
-    }
 });
